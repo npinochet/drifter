@@ -5,13 +5,9 @@
 package main
 
 import (
-	"bufio"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -70,12 +66,12 @@ const (
 
 var (
 	defaultHomeDir     = btcutil.AppDataDir("btcd", false)
-	defaultConfigFile  = filepath.Join(defaultHomeDir, defaultConfigFilename)
-	defaultDataDir     = filepath.Join(defaultHomeDir, defaultDataDirname)
+	defaultConfigFile  = defaultConfigFilename
+	defaultDataDir     = defaultDataDirname
 	knownDbTypes       = database.SupportedDrivers()
-	defaultRPCKeyFile  = filepath.Join(defaultHomeDir, "rpc.key")
-	defaultRPCCertFile = filepath.Join(defaultHomeDir, "rpc.cert")
-	defaultLogDir      = filepath.Join(defaultHomeDir, defaultLogDirname)
+	defaultRPCKeyFile  = "rpc.key"
+	defaultRPCCertFile = "rpc.cert"
+	defaultLogDir      = defaultLogDirname
 )
 
 // runServiceCommand is only set to a real function on Windows.  It is used
@@ -485,11 +481,7 @@ func loadConfig() (*config, []string, error) {
 		preCfg.ConfigFile != defaultConfigFile {
 
 		if _, err := os.Stat(preCfg.ConfigFile); os.IsNotExist(err) {
-			err := createDefaultConfigFile(preCfg.ConfigFile)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error creating a "+
-					"default config file: %v\n", err)
-			}
+			fmt.Fprintf(os.Stderr, "Error loading the default config file: %v\n", err)
 		}
 
 		err := flags.NewIniParser(parser).ParseFile(preCfg.ConfigFile)
@@ -1144,73 +1136,6 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	return &cfg, remainingArgs, nil
-}
-
-// createDefaultConfig copies the file sample-btcd.conf to the given destination path,
-// and populates it with some randomly generated RPC username and password.
-func createDefaultConfigFile(destinationPath string) error {
-	// Create the destination directory if it does not exists
-	err := os.MkdirAll(filepath.Dir(destinationPath), 0700)
-	if err != nil {
-		return err
-	}
-
-	// We assume sample config file path is same as binary
-	path, err := filepath.Abs(filepath.Dir(os.Args[0]))
-	if err != nil {
-		return err
-	}
-	sampleConfigPath := filepath.Join(path, sampleConfigFilename)
-
-	// We generate a random user and password
-	randomBytes := make([]byte, 20)
-	_, err = rand.Read(randomBytes)
-	if err != nil {
-		return err
-	}
-	generatedRPCUser := base64.StdEncoding.EncodeToString(randomBytes)
-
-	_, err = rand.Read(randomBytes)
-	if err != nil {
-		return err
-	}
-	generatedRPCPass := base64.StdEncoding.EncodeToString(randomBytes)
-
-	src, err := os.Open(sampleConfigPath)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-
-	dest, err := os.OpenFile(destinationPath,
-		os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	defer dest.Close()
-
-	// We copy every line from the sample config file to the destination,
-	// only replacing the two lines for rpcuser and rpcpass
-	reader := bufio.NewReader(src)
-	for err != io.EOF {
-		var line string
-		line, err = reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return err
-		}
-
-		if strings.Contains(line, "rpcuser=") {
-			line = "rpcuser=" + generatedRPCUser + "\n"
-		} else if strings.Contains(line, "rpcpass=") {
-			line = "rpcpass=" + generatedRPCPass + "\n"
-		}
-
-		if _, err := dest.WriteString(line); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // btcdDial connects to the address on the named network using the appropriate
