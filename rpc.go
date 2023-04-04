@@ -33,7 +33,7 @@ func init() {
 	}
 }
 
-func hasTxs(address string) (bool, error) {
+func rpcHasTxs(address string) (bool, error) {
 	response := client.SendCmd(&hasTxsCmd{Address: address})
 	res, err := rpcclient.ReceiveFuture(response)
 	if err != nil {
