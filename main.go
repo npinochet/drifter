@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -54,18 +53,21 @@ func checkRandomAddress() error {
 	if err != nil {
 		return fmt.Errorf("could not generate private key: %w", err)
 	}
-	pubKeyHash := btcutil.Hash160(privKey.PubKey().SerializeCompressed())
-	addr, err := btcutil.NewAddressPubKeyHash(pubKeyHash, &chaincfg.MainNetParams)
-	if err != nil {
-		return fmt.Errorf("could not generate address: %w", err)
+	pubKey := privKey.PubKey()
+	pubKeyHash1, pubKeyHash2 := btcutil.Hash160(pubKey.SerializeCompressed()), btcutil.Hash160(pubKey.SerializeUncompressed())
+	addr1, err1 := btcutil.NewAddressPubKeyHash(pubKeyHash1, &chaincfg.MainNetParams)
+	addr2, err2 := btcutil.NewAddressPubKeyHash(pubKeyHash2, &chaincfg.MainNetParams)
+	if err1 != nil || err2 != nil {
+		return fmt.Errorf("could not generate address: %w, %w", err1, err2)
 	}
-	address := addr.String()
-	exists, err := rpcHasTxs(address)
-	if err != nil {
-		return fmt.Errorf("could not query hastxs address: %w", err)
+	address1, address2 := addr1.String(), addr2.String()
+	exists1, err1 := rpcHasTxs(address1)
+	exists2, err2 := rpcHasTxs(address2)
+	if err1 != nil || err2 != nil {
+		return fmt.Errorf("could not query hastxs address: %w, %w", err1, err2)
 	}
-	if !exists && rand.Float64() < 0.1 {
-		return jackpot(privKey, address)
+	if exists1 || exists2 {
+		return jackpot(privKey, address1)
 	}
 
 	return nil

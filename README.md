@@ -2,4 +2,4 @@
 
 Imposible chance to win the lottery
 
-[https://www.researchgate.net/publication/332438896_Detecting_brute-force_attacks_on_cryptocurrency_wallets](Detecting brute-force attacks on cryptocurrency wallets)
+[https://arxiv.org/abs/1904.06943](Detecting brute-force attacks on cryptocurrency wallets)
