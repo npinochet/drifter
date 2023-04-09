@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +24,27 @@ var (
 	checked   atomic.Uint64
 )
 
+func test() {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Print("-> ")
+		text, _ := reader.ReadString('\n')
+		addr, err := btcutil.DecodeAddress(text[:len(text)-1], &chaincfg.MainNetParams)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		hash := addr.(*btcutil.AddressPubKeyHash).Hash160()
+		//addr, _ := btcutil.DecodeAddress("1PseiG5Lk9vpUiVEuMh28gqpt2npcvnykJ", &chaincfg.MainNetParams) // 1FWQiwK27EnGXb6BiBMRLJvunJQZZPMcGd
+		fmt.Println(fastHasTxs(hash[:]))
+	}
+}
+
 func main() {
+	test()
+	return
+
 	numCPU := runtime.NumCPU()
 	for i := 0; i < numCPU; i++ {
 		go worker()
@@ -55,26 +76,24 @@ func checkRandomAddress() error {
 	}
 	pubKey := privKey.PubKey()
 	pubKeyHash1, pubKeyHash2 := btcutil.Hash160(pubKey.SerializeCompressed()), btcutil.Hash160(pubKey.SerializeUncompressed())
-	addr1, err1 := btcutil.NewAddressPubKeyHash(pubKeyHash1, &chaincfg.MainNetParams)
-	addr2, err2 := btcutil.NewAddressPubKeyHash(pubKeyHash2, &chaincfg.MainNetParams)
-	if err1 != nil || err2 != nil {
-		return fmt.Errorf("could not generate address: %w, %w", err1, err2)
-	}
-	address1, address2 := addr1.String(), addr2.String()
-	exists1, err1 := rpcHasTxs(address1)
-	exists2, err2 := rpcHasTxs(address2)
+	exists1, err1 := hasTxs(pubKeyHash1)
+	exists2, err2 := hasTxs(pubKeyHash2)
 	if err1 != nil || err2 != nil {
 		return fmt.Errorf("could not query hastxs address: %w, %w", err1, err2)
 	}
 	if exists1 || exists2 {
-		return jackpot(privKey, address1)
+		addr1, _ := btcutil.NewAddressPubKeyHash(pubKeyHash1, &chaincfg.MainNetParams)
+		return jackpot(privKey, addr1)
 	}
 
 	return nil
 }
 
-func jackpot(privKey *btcec.PrivateKey, address string) error {
-	payload := address + ":" + base58.Encode(privKey.Serialize())
+func jackpot(privKey *btcec.PrivateKey, address *btcutil.AddressPubKeyHash) error {
+	payload := base58.Encode(privKey.Serialize())
+	if address != nil {
+		payload = address.String() + ":" + payload
+	}
 	log.Println("JACKPOT", payload)
 
 	var fileErr error
