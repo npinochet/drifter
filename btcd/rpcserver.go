@@ -181,43 +181,25 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"hastxs":                 handleHasTxs,
 }
 
-type HasTxsCmd struct{ Address string }
+type HasTxsCmd struct{ Address []byte }
 
 func init() {
 	btcjson.MustRegisterCmd("hastxs", (*HasTxsCmd)(nil), 0)
 }
 
+var addrIndexKey = []byte("txbyaddridx")
+
 func handleHasTxs(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
-	addrIndex := s.cfg.AddrIndex
-	if addrIndex == nil {
-		return nil, &btcjson.RPCError{
-			Code:    btcjson.ErrRPCMisc,
-			Message: "Address index must be enabled (--addrindex)",
-		}
-	}
-
-	c := cmd.(*HasTxsCmd)
-	params := s.cfg.ChainParams
-	addr, err := btcutil.DecodeAddress(c.Address, params)
-	if err != nil {
-		return nil, &btcjson.RPCError{
-			Code:    btcjson.ErrRPCInvalidAddressOrKey,
-			Message: "Invalid address or key: " + err.Error(),
-		}
-	}
-
 	var hasTxs bool
-	err = s.cfg.DB.View(func(dbTx database.Tx) error {
-		regions, _, err := addrIndex.TxRegionsForAddress(dbTx, addr, 0, 1, false)
-		hasTxs = len(regions) > 0
-		return err
-	})
-	if err != nil {
-		context := "Failed to load address index entries"
-		return nil, internalRPCError(err.Error(), context)
-	}
+	var addrKey [22]byte
+	copy(addrKey[1:], cmd.(*HasTxsCmd).Address[:])
+	err := s.cfg.DB.View(func(dbTx database.Tx) error {
+		hasTxs = dbTx.Metadata().Bucket(addrIndexKey).Get(addrKey[:]) != nil
 
-	return hasTxs, nil
+		return nil
+	})
+
+	return hasTxs, err
 }
 
 // list of commands that we recognize, but for which btcd has no support because

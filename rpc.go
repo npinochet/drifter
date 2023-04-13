@@ -8,7 +8,7 @@ import (
 	"github.com/btcsuite/btcd/rpcclient"
 )
 
-type hasTxsCmd struct{ Address string }
+type hasTxsCmd struct{ Address []byte }
 
 var connCfg = &rpcclient.ConnConfig{
 	Host:         "localhost:8334",
@@ -33,7 +33,7 @@ func init() {
 	}
 }
 
-func rpcHasTxs(address string) (bool, error) {
+func rpcHasTxs(address []byte) (bool, error) {
 	response := client.SendCmd(&hasTxsCmd{Address: address})
 	res, err := rpcclient.ReceiveFuture(response)
 	if err != nil {
