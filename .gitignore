@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-btcd/btcd
+drifter
 
 # Test binary, built with `go test -c`
 *.test
@@ -15,9 +15,11 @@ btcd/btcd
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-# btcd files
-btcd/logs
-btcd/data
+# Input files
+utxo.dat
+
+# Output files
+*.dht
 
 # MacOS
 .DS_Store

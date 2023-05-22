@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -15,15 +16,22 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/base58"
-	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/npinochet/drifter/utxo"
 )
 
 var (
-	checkTime = 1 * time.Hour
-	checked   atomic.Uint64
+	checkTime                  = 20 * time.Second //1 * time.Hour
+	lookupTableIndexSize int64 = 24
+	checked              atomic.Uint64
 )
 
 func main() {
+	if len(os.Args) != 3 {
+		fmt.Println("Input a valid bitcoin core RPC 'dumptxoutset' utxo filename, and a file name to store the lookup table")
+		os.Exit(1)
+	}
+	utxo.ReadUTXOFile(os.Args[1], os.Args[2], lookupTableIndexSize)
+
 	numCPU := runtime.NumCPU()
 	for i := 0; i < numCPU; i++ {
 		go worker()
@@ -33,47 +41,64 @@ func main() {
 	for {
 		time.Sleep(checkTime)
 		elapsed := time.Since(now)
-		addresses := checked.Load()
-		speed := float64(addresses) / elapsed.Seconds()
-		log.Printf("%d addresses checked (%.2f A/s)\n", addresses, speed)
+		keys := checked.Load()
+		speed := float64(keys) / elapsed.Seconds()
+		log.Printf("%d keys checked [%.2f k/s], biggest collision depth yet: %d\n", keys, speed, utxo.GetBiggestCollisionDepth())
 	}
 }
 
 func worker() {
 	for {
-		if err := checkRandomAddress(); err != nil {
+		if err := checkRandomKey(); err != nil {
 			log.Printf("worker err: %s\n", err)
 		}
 		checked.Add(1)
 	}
 }
 
-func checkRandomAddress() error {
+func checkRandomKey() error {
 	privKey, err := btcec.NewPrivateKey()
 	if err != nil {
 		return fmt.Errorf("could not generate private key: %w", err)
 	}
-	pubKey := privKey.PubKey()
-	btcutil.Hash160(pubKey.SerializeUncompressed())
-	pubKeyHash1, pubKeyHash2 := btcutil.Hash160(pubKey.SerializeCompressed()), btcutil.Hash160(pubKey.SerializeUncompressed())
-	exists1, err1 := rpcHasTxs(pubKeyHash1)
-	exists2, err2 := rpcHasTxs(pubKeyHash2)
-	if err1 != nil || err2 != nil {
-		return fmt.Errorf("could not query hastxs address: %w, %w", err1, err2)
+	// check P2PK, P2PKU
+	pubKey := privKey.PubKey().SerializeCompressed()
+	if txType, exists := utxo.CheckDataExistance(pubKey, utxo.PubKeyType); exists {
+		return jackpot(privKey, txType)
 	}
-	if exists1 || exists2 {
-		addr1, _ := btcutil.NewAddressPubKeyHash(pubKeyHash1, &chaincfg.MainNetParams)
-		return jackpot(privKey, addr1)
+
+	// check P2PKH, P2SH, P2WPKH
+	hash := btcutil.Hash160(pubKey)
+	if txType, exists := utxo.CheckDataExistance(hash, utxo.HashType); exists {
+		return jackpot(privKey, txType)
+	}
+
+	// check P2WSH
+	script := make([]byte, 35)
+	script[0] = 0x21
+	copy(script[1:34], pubKey)
+	script[34] = 0xac
+
+	witnessProg := sha256.Sum256(script)
+	if txType, exists := utxo.CheckDataExistance(witnessProg[:], utxo.WitnessProgType); exists {
+		return jackpot(privKey, txType)
+	}
+
+	// check P2SH-P2WPKH
+	scriptP2WPKH := make([]byte, 22)
+	scriptP2WPKH[0] = 0x00
+	scriptP2WPKH[1] = 0x14
+	copy(scriptP2WPKH[2:22], hash)
+	scriptHash := btcutil.Hash160(scriptP2WPKH)
+	if txType, exists := utxo.CheckDataExistance(scriptHash, utxo.HashType); exists {
+		return jackpot(privKey, txType)
 	}
 
 	return nil
 }
 
-func jackpot(privKey *btcec.PrivateKey, address *btcutil.AddressPubKeyHash) error {
-	payload := base58.Encode(privKey.Serialize())
-	if address != nil {
-		payload = address.String() + ":" + payload
-	}
+func jackpot(privKey *btcec.PrivateKey, txType utxo.TxType) error {
+	payload := base58.Encode(privKey.Serialize()) + ":" + txType.String()
 	log.Println("JACKPOT", payload)
 
 	var fileErr error
