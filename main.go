@@ -20,22 +20,17 @@ import (
 )
 
 var (
-	checkTime = 1 * time.Hour
-	checked   atomic.Uint64
+	checkTime                  = 20 * time.Second //1 * time.Hour
+	lookupTableIndexSize int64 = 24
+	checked              atomic.Uint64
 )
 
-// How to check addresses
-// generate pubKey -> check P2PK, P2PKU (33 bytes)
-// witnessProg = sha256(0x21 + pubKey + 0xac) -> check P2WSH (32 bytes)
-// hash = hash160(pubKey) -> check P2PKH, P2SH, P2WPKH (20 bytes)
-// script_hash = hash160(0x0014 + hash) -> check P2SH(-P2WPKH) (20 bytes)
-
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Println("Must input a valid bitcoin RPC 'dumptxoutset' utxo file")
+	if len(os.Args) != 3 {
+		fmt.Println("Input a valid bitcoin core RPC 'dumptxoutset' utxo filename, and a file name to store the lookup table")
 		os.Exit(1)
 	}
-	utxo.ReadUTXOFile(os.Args[1])
+	utxo.ReadUTXOFile(os.Args[1], os.Args[2], lookupTableIndexSize)
 
 	numCPU := runtime.NumCPU()
 	for i := 0; i < numCPU; i++ {
@@ -46,9 +41,9 @@ func main() {
 	for {
 		time.Sleep(checkTime)
 		elapsed := time.Since(now)
-		addresses := checked.Load()
-		speed := float64(addresses) / elapsed.Seconds()
-		log.Printf("%d keys checked (%.2f k/s)\n", addresses, speed)
+		keys := checked.Load()
+		speed := float64(keys) / elapsed.Seconds()
+		log.Printf("%d keys checked [%.2f k/s], biggest collision depth yet: %d\n", keys, speed, utxo.GetBiggestCollisionDepth())
 	}
 }
 
@@ -68,34 +63,34 @@ func checkRandomKey() error {
 	}
 	// check P2PK, P2PKU
 	pubKey := privKey.PubKey().SerializeCompressed()
-	if txType, exists := utxo.CheckPubKey([utxo.PubKeySize]byte(pubKey)); exists {
+	if txType, exists := utxo.CheckDataExistance(pubKey, utxo.PubKeyType); exists {
 		return jackpot(privKey, txType)
 	}
 
 	// check P2PKH, P2SH, P2WPKH
 	hash := btcutil.Hash160(pubKey)
-	if txType, exists := utxo.CheckHash160([utxo.HashSize]byte(hash)); exists {
+	if txType, exists := utxo.CheckDataExistance(hash, utxo.HashType); exists {
 		return jackpot(privKey, txType)
 	}
 
 	// check P2WSH
-	var script [35]byte
+	script := make([]byte, 35)
 	script[0] = 0x21
 	copy(script[1:34], pubKey)
 	script[34] = 0xac
 
-	hasher := sha256.New()
-	_, _ = hasher.Write(script[:])
-	witnessProg := hasher.Sum(nil)
-	if txType, exists := utxo.CheckWitnessProg([utxo.WitnessProgSize]byte(witnessProg)); exists {
+	witnessProg := sha256.Sum256(script)
+	if txType, exists := utxo.CheckDataExistance(witnessProg[:], utxo.WitnessProgType); exists {
 		return jackpot(privKey, txType)
 	}
 
 	// check P2SH-P2WPKH
-	scriptP2WPKH := [22]byte{0x00, 0x14}
-	copy(scriptP2WPKH[1:22], hash)
-	scriptHash := btcutil.Hash160(scriptP2WPKH[:])
-	if txType, exists := utxo.CheckHash160([utxo.HashSize]byte(scriptHash)); exists {
+	scriptP2WPKH := make([]byte, 22)
+	scriptP2WPKH[0] = 0x00
+	scriptP2WPKH[1] = 0x14
+	copy(scriptP2WPKH[2:22], hash)
+	scriptHash := btcutil.Hash160(scriptP2WPKH)
+	if txType, exists := utxo.CheckDataExistance(scriptHash, utxo.HashType); exists {
 		return jackpot(privKey, txType)
 	}
 

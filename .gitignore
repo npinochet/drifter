@@ -18,5 +18,8 @@ drifter
 # Input files
 utxo.dat
 
+# Output files
+*.dht
+
 # MacOS
 .DS_Store

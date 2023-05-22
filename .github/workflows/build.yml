@@ -1,4 +1,4 @@
-name: Build and Upload
+name: Build, Test and Upload
 on: [push]
 
 jobs:
@@ -16,6 +16,9 @@ jobs:
 
       - name: Build
         run: go build -v .
+
+      - name: Test
+        run: go test -v ./...
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
