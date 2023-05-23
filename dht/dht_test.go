@@ -70,9 +70,7 @@ func TestBatch(t *testing.T) {
 	key := []byte("key")
 	val := []byte{1, 2, 3}
 	batch := db.NewBatch()
-	if err := batch.Add(key, val); err != nil {
-		t.Error(err)
-	}
+	batch.Add(key, val)
 	if err := batch.Commit(); err != nil {
 		t.Error(err)
 	}
@@ -95,14 +93,10 @@ func TestBatchCollision(t *testing.T) {
 	key := []byte("key")
 	val := []byte{1, 2, 3}
 	batch := db.NewBatch()
-	if err := batch.Add(key, val); err != nil {
-		t.Error(err)
-	}
+	batch.Add(key, val)
 	for i := 0; i < 100; i++ {
 		keyval := []byte{byte(i)}
-		if err := batch.Add(keyval, keyval); err != nil {
-			t.Error(err)
-		}
+		batch.Add(keyval, keyval)
 	}
 	if err := batch.Commit(); err != nil {
 		t.Error(err)

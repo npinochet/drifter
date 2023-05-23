@@ -20,14 +20,14 @@ import (
 )
 
 var (
-	checkTime                  = 20 * time.Second //1 * time.Hour
+	checkTime                  = 1 * time.Hour
 	lookupTableIndexSize int64 = 24
 	checked              atomic.Uint64
 )
 
 func main() {
 	if len(os.Args) != 3 {
-		fmt.Println("Input a valid bitcoin core RPC 'dumptxoutset' utxo filename, and a file name to store the lookup table")
+		fmt.Println("Input a valid bitcoin core RPC 'dumptxoutset' utxo filepath, and a filepath to store the lookup table")
 		os.Exit(1)
 	}
 	utxo.ReadUTXOFile(os.Args[1], os.Args[2], lookupTableIndexSize)
@@ -39,10 +39,12 @@ func main() {
 	log.Printf("spawned %d workers\n", numCPU)
 	now := time.Now()
 	for {
+		prevElapsed := time.Since(now)
+		prevKeys := checked.Load()
 		time.Sleep(checkTime)
 		elapsed := time.Since(now)
 		keys := checked.Load()
-		speed := float64(keys) / elapsed.Seconds()
+		speed := float64(keys-prevKeys) / (elapsed - prevElapsed).Seconds()
 		log.Printf("%d keys checked [%.2f k/s], biggest collision depth yet: %d\n", keys, speed, utxo.GetBiggestCollisionDepth())
 	}
 }

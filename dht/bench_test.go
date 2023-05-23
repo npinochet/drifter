@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
+	"os"
 	"testing"
 	"time"
 )
@@ -24,8 +25,9 @@ func BenchmarkWrite(b *testing.B) {
 func WriteAppendBench(indexBitSize int64) error {
 	start := time.Now()
 
+	fileName := fmt.Sprintf("test_%d.dht", indexBitSize)
 	opts := &Options{KByteSize: 50, VByteSize: 1, Create: true, IndexBitSize: indexBitSize}
-	db, err := Open(fmt.Sprintf("test_%d.dht", indexBitSize), opts)
+	db, err := Open(fileName, opts)
 	if err != nil {
 		return err
 	}
@@ -38,6 +40,7 @@ func WriteAppendBench(indexBitSize int64) error {
 		}
 	}
 	log.Printf("Time lasped with size %d: %s\n", indexBitSize, time.Since(start).String())
+	os.Remove(fileName)
 
 	return nil
 }
@@ -45,8 +48,9 @@ func WriteAppendBench(indexBitSize int64) error {
 func WriteAppendBatchBench(indexBitSize int64) error {
 	start := time.Now()
 
+	fileName := fmt.Sprintf("test_%d.dht", indexBitSize)
 	opts := &Options{KByteSize: 50, VByteSize: 1, Create: true, IndexBitSize: indexBitSize}
-	db, err := Open(fmt.Sprintf("test_%d.dht", indexBitSize), opts)
+	db, err := Open(fileName, opts)
 	if err != nil {
 		return err
 	}
@@ -55,14 +59,13 @@ func WriteAppendBatchBench(indexBitSize int64) error {
 	for i := 0; i < 100000; i++ {
 		buf := make([]byte, 50)
 		_, _ = rand.Read(buf)
-		if err := batch.Add(buf, []byte{1}); err != nil {
-			return err
-		}
+		batch.Add(buf, []byte{1})
 	}
 	if err := batch.Commit(); err != nil {
 		return err
 	}
 	log.Printf("Time lasped with size %d: %s\n", indexBitSize, time.Since(start).String())
+	os.Remove(fileName)
 
 	return nil
 }

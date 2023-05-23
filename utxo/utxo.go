@@ -139,9 +139,7 @@ func ReadUTXOFile(inputFileName, lookupTableName string, indexBitSize int64) {
 		if !create {
 			continue
 		}
-		if err := batch.Add(append(scriptType.bucket, partialScriptHash...), []byte{byte(txType)}); err != nil {
-			panic(err)
-		}
+		batch.Add(append(scriptType.bucket, partialScriptHash...), []byte{byte(txType)})
 	}
 	if err := batch.Commit(); err != nil {
 		panic(err)

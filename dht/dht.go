@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"sort"
+	"sync"
 	"sync/atomic"
 
 	"github.com/cespare/xxhash"
@@ -40,13 +41,12 @@ type DB struct {
 	size                  int64
 	kLen, vLen            int
 	idxBitSize, idxSize   int64
+	mutex                 sync.RWMutex
 }
 
 type Batch struct {
-	db         *DB
-	ioffs      []int64
-	buckets    []byte
-	indexCache map[int64]uint64
+	db      *DB
+	buckets []*bucket
 }
 
 func Open(name string, opts *Options) (*DB, error) {
@@ -99,6 +99,8 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	if len(key) > db.kLen {
 		return nil, ErrKLenTooBig
 	}
+	db.mutex.RLock()
+	defer db.mutex.RUnlock()
 	b, err := db.getBucket(db.hash(key), pad(key, db.kLen))
 	if b == nil {
 		return nil, err
@@ -116,52 +118,63 @@ func (db *DB) Put(key, val []byte) error {
 		return ErrVLenTooBig
 	}
 	bucket := &bucket{key: key, val: val}
+	db.mutex.Lock()
+	defer db.mutex.Unlock()
 
 	return db.putBucket(db.hash(key), bucket)
 }
 
-func (db *DB) NewBatch() *Batch { return &Batch{db: db, indexCache: map[int64]uint64{}} }
+func (db *DB) NewBatch() *Batch { return &Batch{db: db} }
 
-func (b *Batch) Add(key, val []byte) error {
-	ioff := int64(b.db.hash(key)) * IndexEntryByteSize
-	nextOff, ok := b.indexCache[ioff]
-	if !ok {
-		var err error
-		nextOff, err = b.db.readIndexOffset(ioff)
-		if err != nil {
-			return err
-		}
-	}
-	bucketsSize := int64(len(b.ioffs) * (b.db.kLen + b.db.vLen + IndexEntryByteSize))
-	b.indexCache[ioff] = uint64(b.db.size - b.db.idxSize + 1 + bucketsSize)
-	b.ioffs = append(b.ioffs, ioff)
-	bucket := bucket{key: key, val: val, nextOff: nextOff}
-	b.buckets = append(b.buckets, bucket.MarshalBinary(b.db.kLen, b.db.vLen)...)
-
-	return nil
-}
+func (b *Batch) Add(key, val []byte) { b.buckets = append(b.buckets, &bucket{key: key, val: val}) }
 
 func (b *Batch) Commit() error {
 	if len(b.buckets) == 0 {
 		return nil
 	}
-	if err := b.db.append(b.buckets); err != nil {
+	b.db.mutex.Lock()
+	defer b.db.mutex.Unlock()
+
+	boffStart := b.db.size - b.db.idxSize + 1
+	kLen, vLen := b.db.kLen, b.db.vLen
+	bucketSize := kLen + vLen + IndexEntryByteSize
+	indexCache := map[int64]uint64{}
+	ioffs := make([]int64, len(b.buckets))
+	buckets := make([]byte, bucketSize*len(b.buckets))
+
+	for i, bucket := range b.buckets {
+		ioff := int64(b.db.hash(bucket.key)) * IndexEntryByteSize
+		nextOff, ok := indexCache[ioff]
+		if !ok {
+			var err error
+			if nextOff, err = b.db.readIndexOffset(ioff); err != nil { // sort reads somehow
+				return err
+			}
+		}
+		indexCache[ioff] = uint64(boffStart + int64(bucketSize*i))
+		bucket.nextOff = nextOff
+
+		ioffs[i] = ioff
+		copy(buckets[i*bucketSize:], bucket.MarshalBinary(kLen, vLen))
+	}
+	if err := b.db.append(buckets); err != nil {
 		return err
 	}
 
-	sort.Slice(b.ioffs, func(i, j int) bool { return b.ioffs[i] < b.ioffs[j] })
-	for _, ioff := range b.ioffs {
-		boff := b.indexCache[ioff]
+	sort.Slice(ioffs, func(i, j int) bool { return ioffs[i] < ioffs[j] })
+	var prevIoff int64 = -1
+	for _, ioff := range ioffs {
+		if ioff == prevIoff {
+			continue
+		}
+		prevIoff = ioff
 		boffBuf := make([]byte, IndexEntryByteSize)
-		binary.LittleEndian.PutUint64(boffBuf, boff)
+		binary.LittleEndian.PutUint64(boffBuf, indexCache[ioff])
 		if _, err := b.db.f.WriteAt(boffBuf, ioff); err != nil {
 			return err
 		}
 	}
-
 	b.buckets = nil
-	b.ioffs = nil
-	b.indexCache = map[int64]uint64{}
 
 	return nil
 }
