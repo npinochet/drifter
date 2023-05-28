@@ -11,11 +11,11 @@ import (
 
 func BenchmarkWrite(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		var small int64 = 21 // 16 MB
+		var small int64 = 21 // 8 MB
 		if err := WriteAppendBatchBench(small); err != nil {
 			panic(err)
 		}
-		var big int64 = 31 // 17 GB
+		var big int64 = 31 // 8.5 GB
 		if err := WriteAppendBatchBench(big); err != nil {
 			panic(err)
 		}

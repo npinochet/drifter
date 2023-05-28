@@ -31,7 +31,7 @@ func TestPutGet(t *testing.T) {
 		t.Error(err)
 	}
 	if !bytes.Equal(valret, val) {
-		t.Errorf("Get with same key must return same value: original: %v, getted: %v", valret, val)
+		t.Errorf("Get with same key must return same value: original: %v, returned: %v", val, valret)
 	}
 	os.Remove(fileName)
 }
@@ -57,7 +57,7 @@ func TestPutCollision(t *testing.T) {
 		t.Error(err)
 	}
 	if !bytes.Equal(valret, val) {
-		t.Errorf("Get with same key must return same value: original: %v, getted: %v", valret, val)
+		t.Errorf("Get with same key must return same value: original: %v, returned: %v", val, valret)
 	}
 	os.Remove(fileName)
 }
@@ -79,7 +79,7 @@ func TestBatch(t *testing.T) {
 		t.Error(err)
 	}
 	if !bytes.Equal(valret, val) {
-		t.Errorf("Get with same key must return same value: original: %v, getted: %v", valret, val)
+		t.Errorf("Get with same key must return same value: original: %v, returned: %v", val, valret)
 	}
 	os.Remove(fileName)
 }
@@ -105,8 +105,18 @@ func TestBatchCollision(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	for i := 0; i < 100; i++ {
+		key := []byte{byte(i)}
+		v, err := db.Get(key)
+		if err != nil {
+			t.Error(err)
+		}
+		if !bytes.Equal(v, key) {
+			t.Errorf("Get with same key must return same value: original: %v, returned: %v", key, defaultVLen)
+		}
+	}
 	if !bytes.Equal(valret, val) {
-		t.Errorf("Get with same key must return same value: original: %v, getted: %v", valret, val)
+		t.Errorf("Get with same key must return same value: original: %v, returned: %v", val, valret)
 	}
 	os.Remove(fileName)
 }

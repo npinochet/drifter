@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	IndexEntryByteSize = 8
+	OffsetEntryByteSize   = 4
+	CommitWriteBufferSize = 65536 // 64 KiB
 
-	hashBitSize              = 64
+	hashBitSize              = 32
 	defaultFilePerm          = 0644
 	defaultIndexBitSize      = 28
 	defaultKLen, defaultVLen = 8, 16
@@ -70,7 +71,7 @@ func Open(name string, opts *Options) (*DB, error) {
 		return nil, ErrIdxSizeTooBig
 	}
 
-	idxSize := int64(1<<idxBitSize) * IndexEntryByteSize
+	idxSize := int64(1<<idxBitSize) * OffsetEntryByteSize
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -101,23 +102,23 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
-	b, err := db.getBucket(db.hash(key), pad(key, db.kLen))
+	b, err := db.getBucket(db.hash(key), key)
 	if b == nil {
 		return nil, err
 	}
-	const zero = "\x00"
 
-	return bytes.TrimRight(b.val, zero), err
+	return b.val, err
 }
 
 func (db *DB) Put(key, val []byte) error {
-	if len(key) > db.kLen {
+	kLen, vLen := len(key), len(val)
+	if kLen > db.kLen {
 		return ErrKLenTooBig
 	}
-	if len(val) > db.vLen {
+	if vLen > db.vLen {
 		return ErrVLenTooBig
 	}
-	bucket := &bucket{key: key, val: val}
+	bucket := &bucket{kLen: uint16(kLen), vLen: uint16(vLen), key: key, val: val}
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
 
@@ -126,7 +127,10 @@ func (db *DB) Put(key, val []byte) error {
 
 func (db *DB) NewBatch() *Batch { return &Batch{db: db} }
 
-func (b *Batch) Add(key, val []byte) { b.buckets = append(b.buckets, &bucket{key: key, val: val}) }
+func (b *Batch) Add(key, val []byte) {
+	bucket := &bucket{kLen: uint16(len(key)), vLen: uint16(len(val)), key: key, val: val}
+	b.buckets = append(b.buckets, bucket)
+}
 
 func (b *Batch) Commit() error {
 	if len(b.buckets) == 0 {
@@ -135,52 +139,37 @@ func (b *Batch) Commit() error {
 	b.db.mutex.Lock()
 	defer b.db.mutex.Unlock()
 
-	boffStart := b.db.size - b.db.idxSize + 1
-	kLen, vLen := b.db.kLen, b.db.vLen
-	bucketSize := kLen + vLen + IndexEntryByteSize
-	indexCache := map[int64]uint64{}
+	bucketSize := b.db.bucketSize()
+	boffStart := (b.db.size-b.db.idxSize)/int64(bucketSize) + 1
+	indexCache := map[int64]uint32{}
 	ioffs := make([]int64, len(b.buckets))
 	buckets := make([]byte, bucketSize*len(b.buckets))
 
 	for i, bucket := range b.buckets {
-		ioff := int64(b.db.hash(bucket.key)) * IndexEntryByteSize
+		ioff := int64(b.db.hash(bucket.key)) * OffsetEntryByteSize
 		nextOff, ok := indexCache[ioff]
 		if !ok {
 			var err error
-			if nextOff, err = b.db.readIndexOffset(ioff); err != nil { // sort reads somehow
+			if nextOff, err = b.db.readIndexOffset(ioff); err != nil {
 				return err
 			}
 		}
-		indexCache[ioff] = uint64(boffStart + int64(bucketSize*i))
+		indexCache[ioff] = uint32(boffStart + int64(i))
 		bucket.nextOff = nextOff
 
 		ioffs[i] = ioff
-		copy(buckets[i*bucketSize:], bucket.MarshalBinary(kLen, vLen))
+		copy(buckets[i*bucketSize:], b.db.MarshalBinary(bucket))
 	}
 	if err := b.db.append(buckets); err != nil {
 		return err
 	}
-
-	sort.Slice(ioffs, func(i, j int) bool { return ioffs[i] < ioffs[j] })
-	var prevIoff int64 = -1
-	for _, ioff := range ioffs {
-		if ioff == prevIoff {
-			continue
-		}
-		prevIoff = ioff
-		boffBuf := make([]byte, IndexEntryByteSize)
-		binary.LittleEndian.PutUint64(boffBuf, indexCache[ioff])
-		if _, err := b.db.f.WriteAt(boffBuf, ioff); err != nil {
-			return err
-		}
-	}
 	b.buckets = nil
 
-	return nil
+	return b.db.commitWriteIndex(ioffs, indexCache)
 }
 
-func (db *DB) getBucket(hash uint64, key []byte) (*bucket, error) {
-	ioff := int64(hash) * IndexEntryByteSize
+func (db *DB) getBucket(hash uint32, key []byte) (*bucket, error) {
+	ioff := int64(hash) * OffsetEntryByteSize
 	boff, err := db.readIndexOffset(ioff)
 	if boff == 0 {
 		return nil, err
@@ -207,12 +196,12 @@ func (db *DB) getBucket(hash uint64, key []byte) (*bucket, error) {
 	return nil, nil
 }
 
-func (db *DB) putBucket(hash uint64, newBucket *bucket) error {
-	newBoff := db.size - db.idxSize + 1
-	newBoffBuf := make([]byte, IndexEntryByteSize)
-	binary.LittleEndian.PutUint64(newBoffBuf, uint64(newBoff))
+func (db *DB) putBucket(hash uint32, newBucket *bucket) error {
+	newBoff := (db.size-db.idxSize)/int64(db.bucketSize()) + 1
+	newBoffBuf := make([]byte, OffsetEntryByteSize)
+	binary.LittleEndian.PutUint32(newBoffBuf, uint32(newBoff))
 
-	ioff := int64(hash) * IndexEntryByteSize
+	ioff := int64(hash) * OffsetEntryByteSize
 	var err error
 	newBucket.nextOff, err = db.readIndexOffset(ioff)
 	if err != nil {
@@ -222,16 +211,54 @@ func (db *DB) putBucket(hash uint64, newBucket *bucket) error {
 		return err
 	}
 
-	return db.append(newBucket.MarshalBinary(db.kLen, db.vLen))
+	return db.append(db.MarshalBinary(newBucket))
 }
 
-func (db *DB) readIndexOffset(off int64) (uint64, error) {
-	buf := make([]byte, IndexEntryByteSize)
+func (db *DB) commitWriteIndex(ioffs []int64, indexCache map[int64]uint32) error {
+	sort.Slice(ioffs, func(i, j int) bool { return ioffs[i] < ioffs[j] })
+
+	var curIoffI = 0
+	var prevIoff int64 = -1
+	writeBuffer := make([]byte, CommitWriteBufferSize)
+	for i := int64(0); i < db.idxSize; i += CommitWriteBufferSize {
+		if ioffs[curIoffI] >= i+CommitWriteBufferSize {
+			continue
+		}
+		if i+CommitWriteBufferSize > db.idxSize {
+			writeBuffer = writeBuffer[:db.idxSize-i]
+		}
+		if _, err := db.f.ReadAt(writeBuffer, i); err != nil {
+			return err
+		}
+		for curIoffI < len(ioffs) && ioffs[curIoffI] < i+CommitWriteBufferSize {
+			if prevIoff == ioffs[curIoffI] {
+				curIoffI++
+				continue
+			}
+			prevIoff = ioffs[curIoffI]
+			boffBuf := make([]byte, OffsetEntryByteSize)
+			binary.LittleEndian.PutUint32(boffBuf, indexCache[ioffs[curIoffI]])
+			copy(writeBuffer[ioffs[curIoffI]-i:], boffBuf)
+			curIoffI++
+		}
+		if _, err := db.f.WriteAt(writeBuffer, i); err != nil {
+			return err
+		}
+		if curIoffI >= len(ioffs)-1 {
+			break
+		}
+	}
+
+	return nil
+}
+
+func (db *DB) readIndexOffset(off int64) (uint32, error) {
+	buf := make([]byte, OffsetEntryByteSize)
 	if _, err := db.f.ReadAt(buf, off); err != nil {
 		return 0, err
 	}
 
-	return binary.LittleEndian.Uint64(buf), nil
+	return binary.LittleEndian.Uint32(buf), nil
 }
 
 func (db *DB) append(data []byte) error {
@@ -244,16 +271,6 @@ func (db *DB) append(data []byte) error {
 	return nil
 }
 
-func (db *DB) hash(key []byte) uint64 {
-	return xxhash.Sum64(key) & ((1 << db.idxBitSize) - 1)
-}
-
-func pad(data []byte, length int) []byte {
-	if len(data) == length {
-		return data
-	}
-	buf := make([]byte, length)
-	copy(buf, data)
-
-	return buf
+func (db *DB) hash(key []byte) uint32 {
+	return uint32(xxhash.Sum64(key) & ((1 << db.idxBitSize) - 1))
 }
